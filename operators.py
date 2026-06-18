@@ -10,12 +10,7 @@ class RMN_OT_right_mouse_navigation(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     _timer = None
-    _count = 0
     MOUSE_RIGHTUP = 0x0010
-    _finished = False
-    _callMenu = False
-    _ortho = False
-    _back_to_ortho = False
     menu_by_mode = {
         "OBJECT": "VIEW3D_MT_object_context_menu",
         "EDIT_MESH": "VIEW3D_MT_edit_mesh_context_menu",
@@ -38,13 +33,6 @@ class RMN_OT_right_mouse_navigation(Operator):
         enable_nodes = addon_prefs.enable_for_node_editors
 
         space_type = context.space_data.type
-
-        if space_type == "VIEW_3D":
-            # Check if the Viewport is Perspective or Orthographic
-            if bpy.context.region_data.is_perspective:
-                self._ortho = False
-            else:
-                self._back_to_ortho = addon_prefs.return_to_ortho_on_exit
 
         # The _finished Boolean acts as a flag to exit the modal loop,
         # it is not made True until after the cancel function is called
@@ -69,8 +57,11 @@ class RMN_OT_right_mouse_navigation(Operator):
                 if addon_prefs.reset_cursor_on_exit:
                     reset_cursor()
 
-            if self._back_to_ortho:
-                bpy.ops.view3d.view_persportho()
+            if self._back_to_ortho and context.space_data.type == "VIEW_3D":
+                # Directly restore the original view perspective instead of calling
+                # view_persportho(), which is a blind toggle and produces incorrect
+                # results after orbiting from an axis-aligned orthographic view.
+                context.space_data.region_3d.view_perspective = self._orig_view_perspective
 
             return {"CANCELLED"}
 
@@ -122,6 +113,12 @@ class RMN_OT_right_mouse_navigation(Operator):
         # Store Blender cursor position
         self.view_x = event.mouse_x
         self.view_y = event.mouse_y
+        # Initialize per-invocation state to prevent values leaking across runs
+        self._count = 0
+        self._finished = False
+        self._callMenu = False
+        self._back_to_ortho = False
+        self._orig_view_perspective = 'PERSP'
         return self.execute(context)
 
     def execute(self, context):
@@ -139,6 +136,13 @@ class RMN_OT_right_mouse_navigation(Operator):
             view = context.space_data.region_3d.view_perspective
             if not (view == "CAMERA" and disable_camera):
                 try:
+                    # Capture the original perspective state before navigation begins
+                    # so it can be restored cleanly on exit without relying on a toggle.
+                    self._orig_view_perspective = context.space_data.region_3d.view_perspective
+                    self._back_to_ortho = (
+                        self._orig_view_perspective == 'ORTHO'
+                        and addon_prefs.return_to_ortho_on_exit
+                    )
                     if navigation_mode == "ORBIT":
                         bpy.ops.view3d.rotate("INVOKE_DEFAULT")
                     else:
